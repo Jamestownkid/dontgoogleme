@@ -81,40 +81,60 @@ class NLPConceptExtractor:
             self.nlp = spacy.load("en_core_web_sm")
 
     def extract_concepts(self, srt_text: str, max_concepts: int = 20) -> List[str]:
-        """Extract visual concepts from SRT text using NLP pipeline"""
+        """Extract smart visual concepts from SRT text using NLP pipeline"""
         self._load_model()
 
         # Clean SRT text (remove timestamps and indices)
         clean_text = self._clean_srt_text(srt_text)
 
-        # Split into sentences
+        # Get all sentences
         sentences = [s.strip() for s in clean_text.split('.') if s.strip()]
 
         concepts = []
         seen_concepts = set()
 
+        # First pass: extract named entities (highest priority)
         for sentence in sentences:
             if not sentence:
                 continue
 
-            # Score sentence for visual importance
-            score = self._score_sentence_visual_importance(sentence)
-            if score < 0.3:  # Skip low-importance sentences
-                continue
-
-            # Extract concepts from high-importance sentences
-            sentence_concepts = self._extract_concepts_from_sentence(sentence)
-
-            for concept in sentence_concepts:
-                if concept not in seen_concepts and len(concept) > 2:
-                    concepts.append(concept)
-                    seen_concepts.add(concept)
-
-                    if len(concepts) >= max_concepts:
-                        break
+            doc = self.nlp(sentence)
+            for ent in doc.ents:
+                if ent.label_ in ['PERSON', 'ORG', 'GPE', 'LOC', 'EVENT', 'PRODUCT', 'WORK_OF_ART']:
+                    concept = ent.text.strip()
+                    if len(concept) > 2 and concept not in seen_concepts:
+                        concepts.append(concept)
+                        seen_concepts.add(concept)
+                        if len(concepts) >= max_concepts:
+                            break
 
             if len(concepts) >= max_concepts:
                 break
+
+        # Second pass: extract noun phrases and important nouns
+        if len(concepts) < max_concepts:
+            for sentence in sentences:
+                if not sentence:
+                    continue
+
+                score = self._score_sentence_visual_importance(sentence)
+                if score < 0.2:  # Lower threshold for second pass
+                    continue
+
+                sentence_concepts = self._extract_concepts_from_sentence(sentence)
+
+                for concept in sentence_concepts:
+                    if (concept not in seen_concepts and
+                        len(concept) > 3 and  # Longer concepts
+                        len(concept.split()) <= 4):  # Not too many words
+                        concepts.append(concept)
+                        seen_concepts.add(concept)
+
+                        if len(concepts) >= max_concepts:
+                            break
+
+                if len(concepts) >= max_concepts:
+                    break
 
         return concepts[:max_concepts]
 
@@ -366,16 +386,19 @@ class JobProcessor:
         return concepts
 
     async def _download_images(self, job: Job, job_dir: str, concepts: List[str]):
-        """Download images for concepts"""
+        """Download images for concepts with smart search and Wikipedia fallback"""
         images_dir = os.path.join(job_dir, "images")
         ensure_dir(images_dir)
 
+        # Extract timestamps from SRT for naming
+        timestamps = self._extract_srt_timestamps(job_dir)
+
         total_images = 0
+        image_counter = 0
+
         for i, concept in enumerate(concepts):
             job.progress = f"Images: {concept} ({i+1}/{len(concepts)})"
             self._update_status(job)
-
-            concept_dir = os.path.join(images_dir, safe_folder_name(concept))
 
             # Calculate images needed for this concept
             images_per_concept = max(1, self.settings["images_per_concept"])
@@ -385,18 +408,48 @@ class JobProcessor:
             if images_per_concept <= 0:
                 break
 
+            # Smart search: try normal search first
             saved = await google_images_download(
                 keyword=concept,
-                out_dir=concept_dir,
+                out_dir=images_dir,
                 images_needed=images_per_concept,
                 max_scrolls=self.settings["max_scrolls_per_keyword"],
-                use_visible_browser=self.settings["use_visible_browser"],
+                use_visible_browser=False,  # Always background
                 use_existing_profile=self.settings["use_existing_chrome_profile"],
                 chrome_profile_dir=self.settings["chrome_profile_dir"],
-                status_cb=None
+                status_cb=None,
+                timestamp_based_naming=True,
+                timestamps=timestamps,
+                start_counter=image_counter
             )
 
-            total_images += saved
+            # If normal search didn't get enough, try Wikipedia search
+            wiki_needed = images_per_concept - saved
+            wiki_saved = 0
+
+            if wiki_needed > 0:
+                job.progress = f"Wikipedia: {concept} ({i+1}/{len(concepts)})"
+                self._update_status(job)
+
+                # Search with "Wikipedia" added for better quality images
+                wiki_keyword = f"{concept} Wikipedia"
+                wiki_saved = await google_images_download(
+                    keyword=wiki_keyword,
+                    out_dir=images_dir,
+                    images_needed=wiki_needed,
+                    max_scrolls=self.settings["max_scrolls_per_keyword"],
+                    use_visible_browser=False,  # Background
+                    use_existing_profile=self.settings["use_existing_chrome_profile"],
+                    chrome_profile_dir=self.settings["chrome_profile_dir"],
+                    status_cb=None,
+                    timestamp_based_naming=True,
+                    timestamps=timestamps,
+                    start_counter=image_counter + saved
+                )
+
+            saved_total = saved + wiki_saved
+            total_images += saved_total
+            image_counter += saved_total
 
             if total_images >= self.settings["max_total_images"]:
                 break
@@ -470,13 +523,13 @@ class UnifiedApp(tk.Tk):
         self.job_listbox.pack(fill="both", expand=True)
         self.job_listbox.bind("<<ListboxSelect>>", self._on_job_selected)
 
-        # Job details panel (bottom of left)
-        details_frame = ttk.LabelFrame(left_panel, text="Job Details", height=200)
-        details_frame.pack(fill="x", pady=(10, 0))
-        details_frame.pack_propagate(False)
+        # Error box (bottom of left)
+        error_frame = ttk.LabelFrame(left_panel, text="Error Box", height=200)
+        error_frame.pack(fill="x", pady=(10, 0))
+        error_frame.pack_propagate(False)
 
-        self.job_details_text = scrolledtext.ScrolledText(details_frame, height=8, wrap="word")
-        self.job_details_text.pack(fill="both", expand=True)
+        self.error_text = scrolledtext.ScrolledText(error_frame, height=8, wrap="word")
+        self.error_text.pack(fill="both", expand=True)
 
         # Right panel - Input and controls
         right_panel = ttk.Frame(main_frame)
@@ -495,31 +548,33 @@ class UnifiedApp(tk.Tk):
         input_frame = ttk.LabelFrame(right_panel, text="Add New Job")
         input_frame.pack(fill="x", pady=(0, 10))
 
-        # URL input
-        ttk.Label(input_frame, text="Video URL:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
-        self.url_var = tk.StringVar()
-        ttk.Entry(input_frame, textvariable=self.url_var, width=60).grid(row=0, column=1, columnspan=2, padx=5, pady=2, sticky="we")
+        # Large URL input for multiple links
+        ttk.Label(input_frame, text="Video URLs (paste multiple links):").grid(row=0, column=0, sticky="nw", padx=5, pady=2)
+        self.url_text = tk.Text(input_frame, height=12, width=80, wrap="word", font=("Arial", 10))
+        self.url_text.grid(row=0, column=1, columnspan=2, padx=5, pady=2, sticky="we")
+        ttk.Label(input_frame, text="Paste as many video links as you want (one per line)", font=("Arial", 8)).grid(row=1, column=1, columnspan=2, sticky="w", padx=5)
 
-        # Platform selection
-        ttk.Label(input_frame, text="Platform:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        # SRT and Image Generator selection
+        ttk.Label(input_frame, text="SRT & Image Generator:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
         self.platform_var = tk.StringVar(value="tiktok")
         platform_combo = ttk.Combobox(input_frame, textvariable=self.platform_var,
-                                    values=["tiktok", "youtube", "instagram", "other"], state="readonly")
-        platform_combo.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+                                    values=["tiktok", "youtube", "instagram", "snapchat", "other"], state="readonly")
+        platform_combo.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+        ttk.Label(input_frame, text="Select platform - only matching links will generate SRT & images", font=("Arial", 8)).grid(row=3, column=1, columnspan=2, sticky="w", padx=5)
 
         # Topic input
-        ttk.Label(input_frame, text="Topic:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(input_frame, text="Topic:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
         self.topic_var = tk.StringVar()
-        ttk.Entry(input_frame, textvariable=self.topic_var, width=40).grid(row=2, column=1, columnspan=2, padx=5, pady=2, sticky="we")
+        ttk.Entry(input_frame, textvariable=self.topic_var, width=40).grid(row=4, column=1, columnspan=2, padx=5, pady=2, sticky="we")
 
         # Notes
-        ttk.Label(input_frame, text="Notes:").grid(row=3, column=0, sticky="nw", padx=5, pady=2)
-        self.notes_text = tk.Text(input_frame, height=4, width=50)
-        self.notes_text.grid(row=3, column=1, columnspan=2, padx=5, pady=2, sticky="we")
+        ttk.Label(input_frame, text="Notes:").grid(row=5, column=0, sticky="nw", padx=5, pady=2)
+        self.notes_text = tk.Text(input_frame, height=3, width=50)
+        self.notes_text.grid(row=5, column=1, columnspan=2, padx=5, pady=2, sticky="we")
 
         # Buttons
         btn_frame = ttk.Frame(input_frame)
-        btn_frame.grid(row=4, column=0, columnspan=3, pady=10)
+        btn_frame.grid(row=6, column=0, columnspan=3, pady=10)
 
         ttk.Button(btn_frame, text="Add Job (Enter)", command=self._add_job).pack(side="left", padx=(0, 10))
         ttk.Button(btn_frame, text="Settings", command=self._show_settings).pack(side="left", padx=(0, 10))
@@ -542,10 +597,10 @@ class UnifiedApp(tk.Tk):
             self.output_dir_var.set(dir_path)
 
     def _add_job(self):
-        """Add a new job to the queue"""
-        url = self.url_var.get().strip()
-        if not url:
-            messagebox.showerror("Error", "Please enter a video URL")
+        """Add jobs to the queue with smart platform filtering"""
+        urls_text = self.url_text.get("1.0", "end").strip()
+        if not urls_text:
+            messagebox.showerror("Error", "Please enter video URLs")
             return
 
         platform_str = self.platform_var.get()
@@ -557,8 +612,7 @@ class UnifiedApp(tk.Tk):
 
         topic = self.topic_var.get().strip()
         if not topic:
-            # Auto-generate topic from URL
-            topic = self._extract_topic_from_url(url)
+            topic = f"{platform_str.title()} Batch"
 
         output_dir = self.output_dir_var.get().strip()
         if not output_dir:
@@ -567,26 +621,66 @@ class UnifiedApp(tk.Tk):
 
         notes = self.notes_text.get("1.0", "end").strip()
 
-        # Create job
-        job = Job(
-            id="",
-            url=url,
-            platform=platform,
-            output_dir=output_dir,
-            topic=topic,
-            notes=notes
-        )
+        # Parse all URLs
+        all_urls = [url.strip() for url in urls_text.split('\n') if url.strip()]
+        if not all_urls:
+            messagebox.showerror("Error", "Please enter video URLs")
+            return
 
-        # Add to jobs dict and queue
-        self.jobs[job.id] = job
-        self.job_queue.put(job)
+        # Smart filtering: only process URLs that match the selected platform
+        platform_domains = {
+            Platform.TIKTOK: ['tiktok.com', 'vm.tiktok.com'],
+            Platform.YOUTUBE: ['youtube.com', 'youtu.be'],
+            Platform.INSTAGRAM: ['instagram.com'],
+            Platform.SNAPCHAT: ['snapchat.com', 'snap.com'],
+            Platform.OTHER: []  # Accept any URL for other
+        }
+
+        domains = platform_domains.get(platform, [])
+        matching_urls = []
+        skipped_urls = []
+
+        for url in all_urls:
+            if platform == Platform.OTHER or any(domain in url for domain in domains):
+                matching_urls.append(url)
+            else:
+                skipped_urls.append(url)
+
+        if not matching_urls:
+            messagebox.showerror("Error", f"No {platform_str} URLs found in the list")
+            return
+
+        # Create jobs for matching URLs
+        jobs_added = 0
+        for url in matching_urls:
+            job_topic = f"{topic} - {jobs_added + 1}" if len(matching_urls) > 1 else topic
+
+            job = Job(
+                id="",
+                url=url,
+                platform=platform,
+                output_dir=output_dir,
+                topic=job_topic,
+                notes=notes
+            )
+
+            # Add to jobs dict and queue
+            self.jobs[job.id] = job
+            self.job_queue.put(job)
+            jobs_added += 1
 
         # Update UI
         self._update_job_list()
-        self._log_status(f"Added job: {job.topic} ({job.url})")
+        self._log_status(f"Added {jobs_added} job(s) for {platform_str}")
+
+        # Show summary in error box
+        summary = f"✅ Added {jobs_added} {platform_str} jobs\n"
+        if skipped_urls:
+            summary += f"⏭️  Skipped {len(skipped_urls)} non-{platform_str} URLs\n"
+        self._show_error(summary)
 
         # Clear input fields
-        self.url_var.set("")
+        self.url_text.delete("1.0", "end")
         self.topic_var.set("")
         self.notes_text.delete("1.0", "end")
 
@@ -623,37 +717,48 @@ class UnifiedApp(tk.Tk):
             self.job_listbox.insert("end", display_text)
 
     def _on_job_selected(self, event):
-        """Handle job selection"""
+        """Handle job selection - show in error box"""
         selection = self.job_listbox.curselection()
         if selection:
             index = selection[0]
             job_id = list(self.jobs.keys())[index]
             job = self.jobs[job_id]
 
-            # Display job details
-            details = f"""ID: {job.id}
+            # Display job info in error box
+            info = f"""📋 Job Details:
+ID: {job.id}
 URL: {job.url}
 Platform: {job.platform.value}
 Topic: {job.topic}
 Status: {job.status.value}
 Created: {job.created_at.strftime('%Y-%m-%d %H:%M:%S')}
 
-Notes:
-{job.notes}
-
 Progress: {job.progress}
 """
 
             if job.error:
-                details += f"\nError: {job.error}"
+                info += f"\n❌ Error: {job.error}"
 
-            self.job_details_text.delete("1.0", "end")
-            self.job_details_text.insert("1.0", details)
+            if job.notes:
+                info += f"\n📝 Notes: {job.notes}"
+
+            self._show_error(info)
 
     def _on_job_status_update(self, job: Job):
         """Handle job status updates"""
         self.after(0, lambda: self._update_job_list())
         self.after(0, lambda: self._log_status(f"Job {job.topic}: {job.status.value} - {job.progress}"))
+
+        # Show errors in error box
+        if job.error:
+            error_msg = f"❌ Job Failed: {job.topic}\n{job.error}\n\nURL: {job.url}\nPlatform: {job.platform.value}"
+            self.after(0, lambda: self._show_error(error_msg))
+
+    def _show_error(self, message: str):
+        """Show message in error box"""
+        self.error_text.delete("1.0", "end")
+        self.error_text.insert("1.0", message)
+        self.error_text.see("end")
 
     def _log_status(self, message: str):
         """Log status message"""
@@ -682,8 +787,107 @@ Progress: {job.progress}
 
     def _show_settings(self):
         """Show settings dialog"""
-        # This would open a settings window - simplified for now
-        messagebox.showinfo("Settings", "Settings panel not implemented yet. Edit settings.json manually.")
+        settings_window = tk.Toplevel(self)
+        settings_window.title("Settings")
+        settings_window.geometry("500x600")
+        settings_window.resizable(False, False)
+
+        # Create settings variables
+        whisper_var = tk.StringVar(value=self.settings.get("whisper_model", "base"))
+        images_per_concept_var = tk.IntVar(value=self.settings.get("images_per_concept", 3))
+        max_concepts_var = tk.IntVar(value=self.settings.get("max_concepts_per_srt", 15))
+        max_total_images_var = tk.IntVar(value=self.settings.get("max_total_images", 50))
+        max_scrolls_var = tk.IntVar(value=self.settings.get("max_scrolls_per_keyword", 6))
+        visible_browser_var = tk.BooleanVar(value=self.settings.get("use_visible_browser", False))  # Always background
+        chrome_profile_var = tk.StringVar(value=self.settings.get("chrome_profile_dir", ""))
+        youtube_srt_var = tk.BooleanVar(value=self.settings.get("srt_youtube_enabled", False))
+        other_srt_var = tk.BooleanVar(value=self.settings.get("srt_other_enabled", False))
+
+        # Layout
+        main_frame = ttk.Frame(settings_window, padding=20)
+        main_frame.pack(fill="both", expand=True)
+
+        row = 0
+
+        # Whisper Model
+        ttk.Label(main_frame, text="Whisper Model:").grid(row=row, column=0, sticky="w", pady=5)
+        whisper_combo = ttk.Combobox(main_frame, textvariable=whisper_var,
+                                   values=["tiny", "base", "small", "medium", "large"], state="readonly", width=15)
+        whisper_combo.grid(row=row, column=1, sticky="w", pady=5)
+        row += 1
+
+        # Images per concept
+        ttk.Label(main_frame, text="Images per Concept:").grid(row=row, column=0, sticky="w", pady=5)
+        ttk.Spinbox(main_frame, from_=1, to=10, textvariable=images_per_concept_var, width=15).grid(row=row, column=1, sticky="w", pady=5)
+        row += 1
+
+        # Max concepts per SRT
+        ttk.Label(main_frame, text="Max Concepts per SRT:").grid(row=row, column=0, sticky="w", pady=5)
+        ttk.Spinbox(main_frame, from_=5, to=30, textvariable=max_concepts_var, width=15).grid(row=row, column=1, sticky="w", pady=5)
+        row += 1
+
+        # Max total images
+        ttk.Label(main_frame, text="Max Total Images:").grid(row=row, column=0, sticky="w", pady=5)
+        ttk.Spinbox(main_frame, from_=10, to=200, textvariable=max_total_images_var, width=15).grid(row=row, column=1, sticky="w", pady=5)
+        row += 1
+
+        # Max scrolls per keyword
+        ttk.Label(main_frame, text="Max Scrolls per Keyword:").grid(row=row, column=0, sticky="w", pady=5)
+        ttk.Spinbox(main_frame, from_=1, to=20, textvariable=max_scrolls_var, width=15).grid(row=row, column=1, sticky="w", pady=5)
+        row += 1
+
+        # Browser visibility (note: always background for image search)
+        ttk.Label(main_frame, text="Browser Visibility:").grid(row=row, column=0, sticky="w", pady=5)
+        ttk.Label(main_frame, text="Background (recommended)", font=("Arial", 8)).grid(row=row, column=1, sticky="w", pady=5)
+        row += 1
+
+        # Chrome profile directory
+        ttk.Label(main_frame, text="Chrome Profile Dir:").grid(row=row, column=0, sticky="w", pady=5)
+        profile_frame = ttk.Frame(main_frame)
+        profile_frame.grid(row=row, column=1, sticky="we", pady=5)
+        ttk.Entry(profile_frame, textvariable=chrome_profile_var, width=20).pack(side="left", fill="x", expand=True)
+        ttk.Button(profile_frame, text="Browse", command=lambda: self._browse_chrome_profile(chrome_profile_var)).pack(side="right")
+        row += 1
+
+        # SRT generation options
+        ttk.Label(main_frame, text="SRT Generation:").grid(row=row, column=0, columnspan=2, sticky="w", pady=(10,5), font=("Arial", 10, "bold"))
+        row += 1
+
+        ttk.Checkbutton(main_frame, text="YouTube SRT Generation", variable=youtube_srt_var).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        row += 1
+
+        ttk.Checkbutton(main_frame, text="Other Platforms SRT Generation", variable=other_srt_var).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        row += 1
+
+        # Buttons
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.grid(row=row, column=0, columnspan=2, pady=(20,0))
+
+        def save_settings():
+            new_settings = {
+                "whisper_model": whisper_var.get(),
+                "images_per_concept": images_per_concept_var.get(),
+                "max_concepts_per_srt": max_concepts_var.get(),
+                "max_total_images": max_total_images_var.get(),
+                "max_scrolls_per_keyword": max_scrolls_var.get(),
+                "use_visible_browser": False,  # Always background for image search
+                "chrome_profile_dir": chrome_profile_var.get(),
+                "srt_youtube_enabled": youtube_srt_var.get(),
+                "srt_other_enabled": other_srt_var.get(),
+            }
+            self.settings.update(new_settings)
+            save_settings_to_file(new_settings)
+            settings_window.destroy()
+            messagebox.showinfo("Settings", "Settings saved successfully!")
+
+        ttk.Button(btn_frame, text="Save", command=save_settings).pack(side="left", padx=(0, 10))
+        ttk.Button(btn_frame, text="Cancel", command=settings_window.destroy).pack(side="left")
+
+    def _browse_chrome_profile(self, var):
+        """Browse for Chrome profile directory"""
+        dir_path = filedialog.askdirectory(title="Select Chrome Profile Directory")
+        if dir_path:
+            var.set(dir_path)
 
     def _open_output_dir(self):
         """Open output directory"""
