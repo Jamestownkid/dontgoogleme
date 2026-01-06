@@ -47,6 +47,7 @@ class Platform(Enum):
     YOUTUBE = "youtube"
     TIKTOK = "tiktok"
     INSTAGRAM = "instagram"
+    SNAPCHAT = "snapchat"
     OTHER = "other"
 
 
@@ -1019,7 +1020,7 @@ Progress: {job.progress}
         row += 1
 
         # SRT generation options
-        ttk.Label(main_frame, text="SRT Generation:").grid(row=row, column=0, columnspan=2, sticky="w", pady=(10,5), font=("Arial", 10, "bold"))
+        ttk.Label(main_frame, text="SRT Generation:", font=("Arial", 10, "bold")).grid(row=row, column=0, columnspan=2, sticky="w", pady=(10,5))
         row += 1
 
         ttk.Checkbutton(main_frame, text="YouTube SRT Generation", variable=youtube_srt_var).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
