@@ -1,49 +1,32 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
+.venv/
 venv/
-env/
-ENV/
 
-# IDE
+# OS / IDE
+.DS_Store
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# OS
-.DS_Store
-Thumbs.db
-
-# App data
-images/
-srt/
-*.log
-job_*.json
-
-# Browser profiles
+# Playwright / browser data
+ms-playwright/
+playwright/
 .playwright_profile/
+playwright_profile/
 
-# Temp files
-*.tmp
-*.bak
+# App-generated output
+srt/
+images/
+output/
+outputs/
+downloads/
+tmp/
+temp/
+
+# Archives / artifacts
+*.zip
+*.tar
+*.tar.gz
+*.7z
