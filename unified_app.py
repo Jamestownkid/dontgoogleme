@@ -463,6 +463,9 @@ class UnifiedApp(tk.Tk):
         self.title("Research & B-Roll Harvester")
         self.geometry("1200x800")
 
+        # Track settings window
+        self.settings_window = None
+
         # Set pink theme
         self.configure(bg='#FFE4E1')  # Misty Rose background
         style = ttk.Style()
@@ -799,11 +802,25 @@ Progress: {job.progress}
                 continue
 
     def _show_settings(self):
-        """Show settings dialog"""
+        """Show settings dialog (only one at a time)"""
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            self.settings_window.focus()
+            return
+
         settings_window = tk.Toplevel(self)
         settings_window.title("Settings")
-        settings_window.geometry("500x600")
+        settings_window.geometry("550x700")
         settings_window.resizable(False, False)
+        settings_window.configure(bg='#FFE4E1')
+        self.settings_window = settings_window
+
+        # Handle window close
+        def on_close():
+            self.settings_window = None
+            settings_window.destroy()
+
+        settings_window.protocol("WM_DELETE_WINDOW", on_close)
 
         # Create settings variables
         whisper_var = tk.StringVar(value=self.settings.get("whisper_model", "base"))
@@ -811,10 +828,13 @@ Progress: {job.progress}
         max_concepts_var = tk.IntVar(value=self.settings.get("max_concepts_per_srt", 15))
         max_total_images_var = tk.IntVar(value=self.settings.get("max_total_images", 50))
         max_scrolls_var = tk.IntVar(value=self.settings.get("max_scrolls_per_keyword", 6))
-        visible_browser_var = tk.BooleanVar(value=self.settings.get("use_visible_browser", False))  # Always background
         chrome_profile_var = tk.StringVar(value=self.settings.get("chrome_profile_dir", ""))
         youtube_srt_var = tk.BooleanVar(value=self.settings.get("srt_youtube_enabled", False))
         other_srt_var = tk.BooleanVar(value=self.settings.get("srt_other_enabled", False))
+
+        # Model status variable
+        model_status_var = tk.StringVar(value="Checking...")
+        self._check_whisper_model_status(model_status_var)
 
         # Layout
         main_frame = ttk.Frame(settings_window, padding=20)
@@ -822,11 +842,58 @@ Progress: {job.progress}
 
         row = 0
 
-        # Whisper Model
+        # Whisper Model with management
         ttk.Label(main_frame, text="Whisper Model:").grid(row=row, column=0, sticky="w", pady=5)
-        whisper_combo = ttk.Combobox(main_frame, textvariable=whisper_var,
-                                   values=["tiny", "base", "small", "medium", "large"], state="readonly", width=15)
-        whisper_combo.grid(row=row, column=1, sticky="w", pady=5)
+        model_frame = ttk.Frame(main_frame)
+        model_frame.grid(row=row, column=1, sticky="we", pady=5)
+
+        whisper_combo = ttk.Combobox(model_frame, textvariable=whisper_var,
+                                   values=["tiny", "base", "small", "medium", "large"], state="readonly", width=10)
+        whisper_combo.pack(side="left")
+
+        def load_model():
+            """Download/load the selected whisper model"""
+            model = whisper_var.get()
+            try:
+                import whisper
+                self._show_error(f"Loading Whisper model '{model}'...")
+                settings_window.update()
+                whisper.load_model(model)  # This will download if needed
+                self._show_error(f"✅ Whisper model '{model}' loaded successfully!")
+                messagebox.showinfo("Model Loaded", f"Whisper model '{model}' is ready to use!")
+            except Exception as e:
+                self._show_error(f"❌ Failed to load model '{model}': {str(e)}")
+                messagebox.showerror("Load Failed", f"Could not load model '{model}': {str(e)}")
+
+        def auto_detect_models():
+            """Auto-detect available whisper models on system"""
+            import os
+            import whisper
+
+            # Check cache directory for downloaded models
+            cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "whisper")
+            available_models = []
+
+            if os.path.exists(cache_dir):
+                for model in ["tiny", "base", "small", "medium", "large"]:
+                    model_files = [f for f in os.listdir(cache_dir) if model in f and f.endswith(('.pt', '.bin'))]
+                    if model_files:
+                        available_models.append(model)
+
+            if available_models:
+                # Use the largest available model
+                best_model = max(available_models, key=lambda x: ["tiny", "base", "small", "medium", "large"].index(x))
+                whisper_var.set(best_model)
+                self._show_error(f"✅ Auto-detected model: '{best_model}'")
+            else:
+                self._show_error("❌ No cached models found. Use 'Load' to download one.")
+                messagebox.showinfo("No Models", "No Whisper models found. Click 'Load' to download the selected model.")
+
+        ttk.Button(model_frame, text="Load", command=load_model).pack(side="left", padx=(5,0))
+        ttk.Button(model_frame, text="Auto", command=auto_detect_models).pack(side="left", padx=(5,0))
+
+        # Model status
+        ttk.Label(model_frame, textvariable=model_status_var, font=("Arial", 8)).pack(side="left", padx=(10,0))
         row += 1
 
         # Images per concept
@@ -844,29 +911,34 @@ Progress: {job.progress}
         max_total_spinbox = ttk.Spinbox(main_frame, from_=10, to=200, textvariable=max_total_images_var, width=15)
         max_total_spinbox.grid(row=row, column=1, sticky="w", pady=5)
 
-        def on_max_total_change():
-            """Scale other values proportionally when max total images changes"""
+        def update_scaling():
+            """Smart scaling when any value changes"""
             try:
-                new_total = int(max_total_images_var.get())
-                old_total = self.settings.get("max_total_images", 50)
+                images_per = int(images_per_concept_var.get())
+                max_concepts = int(max_concepts_var.get())
+                max_scrolls = int(max_scrolls_var.get())
 
-                if old_total > 0 and new_total != old_total:
-                    ratio = new_total / old_total
+                # Calculate logical total: images_per * max_concepts * reasonable_multiplier
+                # We assume each concept might need 1-3 images, so scale max_total accordingly
+                calculated_total = images_per * max_concepts * 2  # *2 for some buffer
 
-                    # Scale images per concept proportionally
-                    old_images_per = self.settings.get("images_per_concept", 3)
-                    new_images_per = max(1, min(10, int(old_images_per * ratio)))
-                    images_per_concept_var.set(new_images_per)
+                # Only update if it's significantly different (avoid infinite loops)
+                current_total = int(max_total_images_var.get())
+                if abs(calculated_total - current_total) > 5:
+                    max_total_images_var.set(max(10, min(200, calculated_total)))
 
-                    # Scale max concepts proportionally
-                    old_concepts = self.settings.get("max_concepts_per_srt", 15)
-                    new_concepts = max(5, min(30, int(old_concepts * ratio)))
-                    max_concepts_var.set(new_concepts)
-
-            except (ValueError, ZeroDivisionError):
+            except (ValueError, TypeError):
                 pass
 
-        max_total_images_var.trace_add("write", lambda *args: on_max_total_change())
+        def on_any_change(*args):
+            """Update scaling when any spinbox changes"""
+            settings_window.after(300, update_scaling)  # Debounce
+
+        # Connect all spinboxes to scaling logic
+        images_per_concept_var.trace_add("write", on_any_change)
+        max_concepts_var.trace_add("write", on_any_change)
+        max_scrolls_var.trace_add("write", on_any_change)
+        max_total_images_var.trace_add("write", on_any_change)
         row += 1
 
         # Max scrolls per keyword
@@ -921,8 +993,12 @@ Progress: {job.progress}
 
             if existing_paths:
                 # Use the first available path
-                chrome_profile_var.set(existing_paths[0])
-                messagebox.showinfo("Auto-Detect", f"Found profile: {existing_paths[0]}")
+                detected_path = existing_paths[0]
+                chrome_profile_var.set(detected_path)
+                # Save it to settings immediately
+                self.settings["chrome_profile_dir"] = detected_path
+                save_settings_to_file(self.settings)
+                messagebox.showinfo("Auto-Detect", f"Found and saved profile: {detected_path}")
             else:
                 messagebox.showwarning("Auto-Detect", "No browser profiles found automatically")
 
@@ -962,6 +1038,7 @@ Progress: {job.progress}
             self.settings.update(new_settings)
             save_settings_to_file(new_settings)
 
+            self.settings_window = None
             settings_window.destroy()
 
             # Show message about model change
@@ -972,6 +1049,23 @@ Progress: {job.progress}
 
         ttk.Button(btn_frame, text="Save", command=save_settings).pack(side="left", padx=(0, 10))
         ttk.Button(btn_frame, text="Cancel", command=settings_window.destroy).pack(side="left")
+
+    def _check_whisper_model_status(self, status_var):
+        """Check if the current whisper model is available"""
+        try:
+            import os
+            model = self.settings.get("whisper_model", "base")
+            cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "whisper")
+
+            if os.path.exists(cache_dir):
+                model_files = [f for f in os.listdir(cache_dir) if model in f and f.endswith(('.pt', '.bin'))]
+                if model_files:
+                    status_var.set("✅ Available")
+                    return
+
+            status_var.set("⚠️  Not downloaded")
+        except:
+            status_var.set("❓ Unknown")
 
     def _browse_chrome_profile(self, var):
         """Browse for Chrome profile directory"""
