@@ -133,8 +133,8 @@ class NLPConceptExtractor:
                     if len(concepts) >= max_concepts:
                         break
 
-            if len(concepts) >= max_concepts:
-                break
+                if len(concepts) >= max_concepts:
+                    break
 
         return concepts[:max_concepts]
 
@@ -453,6 +453,36 @@ class JobProcessor:
 
             if total_images >= self.settings["max_total_images"]:
                 break
+
+    def _extract_srt_timestamps(self, job_dir: str) -> List[str]:
+        """Extract timestamps from SRT file for image naming"""
+        timestamps = []
+        srt_path = None
+
+        # Find SRT file
+        for file in os.listdir(job_dir):
+            if file.endswith('.srt'):
+                srt_path = os.path.join(job_dir, file)
+                break
+
+        if srt_path and os.path.exists(srt_path):
+            try:
+                with open(srt_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # Extract timestamps from SRT format (00:00:00,000 --> 00:00:05,000)
+                import re
+                timestamp_pattern = r'(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})'
+                matches = re.findall(timestamp_pattern, content)
+
+                for start, end in matches:
+                    timestamps.append(start.replace(',', '_').replace(':', '-'))
+                    if len(timestamps) >= 50:  # Limit timestamps
+                        break
+            except Exception as e:
+                print(f"Error extracting timestamps: {e}")
+
+        return timestamps
 
 
 class UnifiedApp(tk.Tk):

@@ -146,6 +146,9 @@ async def google_images_download(
     use_existing_profile: bool,
     chrome_profile_dir: str,
     status_cb: Callable[[str], None] | None = None,
+    timestamp_based_naming: bool = False,
+    timestamps: list = None,
+    start_counter: int = 0,
 ) -> int:
     """Download up to images_needed images for a keyword into out_dir."""
     ensure_dir(out_dir)
