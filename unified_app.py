@@ -216,8 +216,8 @@ class JobProcessor:
             job.status = JobStatus.DOWNLOADING
             self._update_status(job)
 
-            # Create job directory
-            job_dir = os.path.join(job.output_dir, f"{job.topic}_{job.id}")
+            # Create job directory (just topic name, no subtopics)
+            job_dir = os.path.join(job.output_dir, safe_folder_name(job.topic))
             ensure_dir(job_dir)
 
             # Save job metadata

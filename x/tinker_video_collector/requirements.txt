@@ -1,0 +1,3 @@
+yt-dlp>=2024.10.07
+openai-whisper>=20240930
+tqdm>=4.66.0
