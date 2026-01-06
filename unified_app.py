@@ -463,6 +463,19 @@ class UnifiedApp(tk.Tk):
         self.title("Research & B-Roll Harvester")
         self.geometry("1200x800")
 
+        # Set pink theme
+        self.configure(bg='#FFE4E1')  # Misty Rose background
+        style = ttk.Style()
+        style.configure('TFrame', background='#FFE4E1')
+        style.configure('TLabel', background='#FFE4E1', foreground='#8B008B')  # Dark Magenta text
+        style.configure('TButton', background='#FFB6C1', foreground='#8B008B')  # Light Pink buttons
+        style.configure('TEntry', fieldbackground='#FFF0F5')  # Lavender Blush
+        style.configure('TCombobox', fieldbackground='#FFF0F5')
+        style.configure('TSpinbox', fieldbackground='#FFF0F5')
+        style.configure('TLabelframe', background='#FFE4E1', foreground='#8B008B')
+        style.configure('TLabelframe.Label', background='#FFE4E1', foreground='#8B008B', font=('Arial', 10, 'bold'))
+        style.configure('TCheckbutton', background='#FFE4E1', foreground='#8B008B')
+
         # Load settings
         self.settings = self._load_app_settings()
 
@@ -826,9 +839,34 @@ Progress: {job.progress}
         ttk.Spinbox(main_frame, from_=5, to=30, textvariable=max_concepts_var, width=15).grid(row=row, column=1, sticky="w", pady=5)
         row += 1
 
-        # Max total images
+        # Max total images (with proportional scaling)
         ttk.Label(main_frame, text="Max Total Images:").grid(row=row, column=0, sticky="w", pady=5)
-        ttk.Spinbox(main_frame, from_=10, to=200, textvariable=max_total_images_var, width=15).grid(row=row, column=1, sticky="w", pady=5)
+        max_total_spinbox = ttk.Spinbox(main_frame, from_=10, to=200, textvariable=max_total_images_var, width=15)
+        max_total_spinbox.grid(row=row, column=1, sticky="w", pady=5)
+
+        def on_max_total_change():
+            """Scale other values proportionally when max total images changes"""
+            try:
+                new_total = int(max_total_images_var.get())
+                old_total = self.settings.get("max_total_images", 50)
+
+                if old_total > 0 and new_total != old_total:
+                    ratio = new_total / old_total
+
+                    # Scale images per concept proportionally
+                    old_images_per = self.settings.get("images_per_concept", 3)
+                    new_images_per = max(1, min(10, int(old_images_per * ratio)))
+                    images_per_concept_var.set(new_images_per)
+
+                    # Scale max concepts proportionally
+                    old_concepts = self.settings.get("max_concepts_per_srt", 15)
+                    new_concepts = max(5, min(30, int(old_concepts * ratio)))
+                    max_concepts_var.set(new_concepts)
+
+            except (ValueError, ZeroDivisionError):
+                pass
+
+        max_total_images_var.trace_add("write", lambda *args: on_max_total_change())
         row += 1
 
         # Max scrolls per keyword
@@ -841,11 +879,54 @@ Progress: {job.progress}
         ttk.Label(main_frame, text="Background (recommended)", font=("Arial", 8)).grid(row=row, column=1, sticky="w", pady=5)
         row += 1
 
-        # Chrome profile directory
-        ttk.Label(main_frame, text="Chrome Profile Dir:").grid(row=row, column=0, sticky="w", pady=5)
+        # Chrome profile directory with auto-detection
+        ttk.Label(main_frame, text="Browser Profile:").grid(row=row, column=0, sticky="w", pady=5)
         profile_frame = ttk.Frame(main_frame)
         profile_frame.grid(row=row, column=1, sticky="we", pady=5)
-        ttk.Entry(profile_frame, textvariable=chrome_profile_var, width=20).pack(side="left", fill="x", expand=True)
+
+        profile_entry = ttk.Entry(profile_frame, textvariable=chrome_profile_var, width=15)
+        profile_entry.pack(side="left", fill="x", expand=True)
+
+        def auto_detect_profile():
+            """Auto-detect browser profile directories"""
+            import os
+            import platform
+
+            system = platform.system()
+            home = os.path.expanduser("~")
+
+            possible_paths = []
+
+            if system == "Linux":
+                possible_paths = [
+                    f"{home}/.config/google-chrome",
+                    f"{home}/.config/chromium",
+                    f"{home}/.mozilla/firefox",
+                ]
+            elif system == "Darwin":  # macOS
+                possible_paths = [
+                    f"{home}/Library/Application Support/Google/Chrome",
+                    f"{home}/Library/Application Support/Chromium",
+                    f"{home}/Library/Application Support/Firefox/Profiles",
+                ]
+            elif system == "Windows":
+                possible_paths = [
+                    f"{home}\\AppData\\Local\\Google\\Chrome\\User Data",
+                    f"{home}\\AppData\\Local\\Chromium\\User Data",
+                    f"{home}\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles",
+                ]
+
+            # Check which paths exist
+            existing_paths = [path for path in possible_paths if os.path.exists(path)]
+
+            if existing_paths:
+                # Use the first available path
+                chrome_profile_var.set(existing_paths[0])
+                messagebox.showinfo("Auto-Detect", f"Found profile: {existing_paths[0]}")
+            else:
+                messagebox.showwarning("Auto-Detect", "No browser profiles found automatically")
+
+        ttk.Button(profile_frame, text="Auto", command=auto_detect_profile).pack(side="left", padx=(2,0))
         ttk.Button(profile_frame, text="Browse", command=lambda: self._browse_chrome_profile(chrome_profile_var)).pack(side="right")
         row += 1
 
@@ -864,8 +945,11 @@ Progress: {job.progress}
         btn_frame.grid(row=row, column=0, columnspan=2, pady=(20,0))
 
         def save_settings():
+            old_model = self.settings.get("whisper_model", "base")
+            new_model = whisper_var.get()
+
             new_settings = {
-                "whisper_model": whisper_var.get(),
+                "whisper_model": new_model,
                 "images_per_concept": images_per_concept_var.get(),
                 "max_concepts_per_srt": max_concepts_var.get(),
                 "max_total_images": max_total_images_var.get(),
@@ -877,8 +961,14 @@ Progress: {job.progress}
             }
             self.settings.update(new_settings)
             save_settings_to_file(new_settings)
+
             settings_window.destroy()
-            messagebox.showinfo("Settings", "Settings saved successfully!")
+
+            # Show message about model change
+            if old_model != new_model:
+                messagebox.showinfo("Settings", f"Settings saved! Whisper model changed from {old_model} to {new_model}.\nModel will be used for new SRT generations.")
+            else:
+                messagebox.showinfo("Settings", "Settings saved successfully!")
 
         ttk.Button(btn_frame, text="Save", command=save_settings).pack(side="left", padx=(0, 10))
         ttk.Button(btn_frame, text="Cancel", command=settings_window.destroy).pack(side="left")
