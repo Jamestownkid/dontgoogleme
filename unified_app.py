@@ -1032,6 +1032,21 @@ Progress: {job.progress}
         btn_frame = ttk.Frame(main_frame)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=(20,0))
 
+        def reset_settings():
+            """Reset all settings to defaults"""
+            # Reset variables to defaults
+            whisper_var.set("base")
+            images_per_concept_var.set(3)
+            max_concepts_var.set(15)
+            max_total_images_var.set(50)
+            max_scrolls_var.set(6)
+            chrome_profile_var.set("")
+            youtube_srt_var.set(False)
+            other_srt_var.set(False)
+
+            # Update model status
+            self._check_whisper_model_status(model_status_var)
+
         def save_settings():
             old_model = self.settings.get("whisper_model", "base")
             new_model = whisper_var.get()
@@ -1060,7 +1075,8 @@ Progress: {job.progress}
                 messagebox.showinfo("Settings", "Settings saved successfully!")
 
         ttk.Button(btn_frame, text="Save", command=save_settings).pack(side="left", padx=(0, 10))
-        ttk.Button(btn_frame, text="Cancel", command=settings_window.destroy).pack(side="left")
+        ttk.Button(btn_frame, text="Reset", command=reset_settings).pack(side="left", padx=(0, 10))
+        ttk.Button(btn_frame, text="Cancel", command=lambda: (setattr(self, 'settings_window', None), settings_window.destroy())).pack(side="left")
 
     def _check_whisper_model_status(self, status_var):
         """Check if the current whisper model is available"""
