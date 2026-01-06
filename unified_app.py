@@ -513,13 +513,25 @@ class UnifiedApp(tk.Tk):
         }
 
         try:
-            with open("settings.json", "r") as f:
+            settings_file = os.path.join(os.path.dirname(__file__), "settings.json")
+            with open(settings_file, "r") as f:
                 loaded = json.load(f)
                 defaults.update(loaded)
         except FileNotFoundError:
             pass
 
         return defaults
+
+    def _save_app_settings(self, settings: dict):
+        """Save application settings"""
+        try:
+            settings_file = os.path.join(os.path.dirname(__file__), "settings.json")
+            with open(settings_file, "w") as f:
+                json.dump(settings, f, indent=2)
+            print(f"Settings saved to {settings_file}")
+        except Exception as e:
+            print(f"Error saving settings: {e}")
+            messagebox.showerror("Save Error", f"Could not save settings: {e}")
 
     def _setup_ui(self):
         """Setup the main UI"""
@@ -592,7 +604,7 @@ class UnifiedApp(tk.Tk):
         btn_frame = ttk.Frame(input_frame)
         btn_frame.grid(row=6, column=0, columnspan=3, pady=10)
 
-        ttk.Button(btn_frame, text="Add Job (Enter)", command=self._add_job).pack(side="left", padx=(0, 10))
+        ttk.Button(btn_frame, text="Add Job", command=self._add_job).pack(side="left", padx=(0, 10))
         ttk.Button(btn_frame, text="Settings", command=self._show_settings).pack(side="left", padx=(0, 10))
         ttk.Button(btn_frame, text="Open Output", command=self._open_output_dir).pack(side="left")
 
@@ -997,7 +1009,7 @@ Progress: {job.progress}
                 chrome_profile_var.set(detected_path)
                 # Save it to settings immediately
                 self.settings["chrome_profile_dir"] = detected_path
-                save_settings_to_file(self.settings)
+                self._save_app_settings(self.settings)
                 messagebox.showinfo("Auto-Detect", f"Found and saved profile: {detected_path}")
             else:
                 messagebox.showwarning("Auto-Detect", "No browser profiles found automatically")
@@ -1036,7 +1048,7 @@ Progress: {job.progress}
                 "srt_other_enabled": other_srt_var.get(),
             }
             self.settings.update(new_settings)
-            save_settings_to_file(new_settings)
+            self._save_app_settings(new_settings)
 
             self.settings_window = None
             settings_window.destroy()
@@ -1074,12 +1086,28 @@ Progress: {job.progress}
             var.set(dir_path)
 
     def _open_output_dir(self):
-        """Open output directory"""
-        output_dir = self.output_dir_var.get()
-        if os.path.exists(output_dir):
-            os.system(f'xdg-open "{output_dir}"')
-        else:
-            messagebox.showerror("Error", f"Directory does not exist: {output_dir}")
+        """Open output directory - opens the most recent job folder"""
+        base_output_dir = self.output_dir_var.get()
+
+        if not os.path.exists(base_output_dir):
+            messagebox.showerror("Error", f"Directory does not exist: {base_output_dir}")
+            return
+
+        # Find the most recent job folder
+        try:
+            subdirs = [d for d in os.listdir(base_output_dir)
+                      if os.path.isdir(os.path.join(base_output_dir, d))]
+            if subdirs:
+                # Sort by modification time (most recent first)
+                subdirs.sort(key=lambda x: os.path.getmtime(os.path.join(base_output_dir, x)), reverse=True)
+                most_recent_job = os.path.join(base_output_dir, subdirs[0])
+                os.system(f'xdg-open "{most_recent_job}"')
+            else:
+                # No job folders, open base directory
+                os.system(f'xdg-open "{base_output_dir}"')
+        except Exception as e:
+            # Fallback to base directory
+            os.system(f'xdg-open "{base_output_dir}"')
 
 
 if __name__ == "__main__":
