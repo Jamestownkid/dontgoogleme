@@ -295,7 +295,15 @@ async def google_images_download(
                     continue
 
                 seen.add(url)
-                filename = os.path.join(out_dir, f"{saved+1:03d}.jpg")
+                # Generate filename based on timestamp or counter
+                if timestamp_based_naming and timestamps and (start_counter + saved) < len(timestamps):
+                    timestamp = timestamps[start_counter + saved]
+                    safe_keyword = keyword.replace(' ', '_').replace('/', '_')[:30]  # Limit length
+                    filename = os.path.join(out_dir, f"{timestamp}_{safe_keyword}.jpg")
+                else:
+                    # Fallback: use concept name + counter
+                    safe_keyword = keyword.replace(' ', '_').replace('/', '_')[:20]  # Limit length
+                    filename = os.path.join(out_dir, f"{safe_keyword}_{saved+1:02d}.jpg")
                 try:
                     set_status(f"Downloading {saved+1}/{images_needed} for '{keyword}'")
                     r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})

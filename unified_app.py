@@ -130,11 +130,11 @@ class NLPConceptExtractor:
                         concepts.append(concept)
                         seen_concepts.add(concept)
 
-                        if len(concepts) >= max_concepts:
-                            break
+                    if len(concepts) >= max_concepts:
+                        break
 
-                if len(concepts) >= max_concepts:
-                    break
+            if len(concepts) >= max_concepts:
+                break
 
         return concepts[:max_concepts]
 
