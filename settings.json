@@ -1,0 +1,12 @@
+{
+  "whisper_model": "base",
+  "images_per_concept": 3,
+  "max_concepts_per_srt": 15,
+  "max_total_images": 50,
+  "max_scrolls_per_keyword": 6,
+  "use_visible_browser": true,
+  "use_existing_chrome_profile": false,
+  "chrome_profile_dir": "",
+  "srt_youtube_enabled": false,
+  "srt_other_enabled": false
+}
