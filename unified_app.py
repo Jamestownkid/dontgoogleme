@@ -47,7 +47,6 @@ class Platform(Enum):
     YOUTUBE = "youtube"
     TIKTOK = "tiktok"
     INSTAGRAM = "instagram"
-    SNAPCHAT = "snapchat"
     OTHER = "other"
 
 
@@ -587,7 +586,7 @@ class UnifiedApp(tk.Tk):
         ttk.Label(input_frame, text="SRT & Image Generator:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
         self.platform_var = tk.StringVar(value="tiktok")
         platform_combo = ttk.Combobox(input_frame, textvariable=self.platform_var,
-                                    values=["tiktok", "youtube", "instagram", "snapchat", "other"], state="readonly")
+                                    values=["tiktok", "youtube", "instagram", "other"], state="readonly")
         platform_combo.grid(row=2, column=1, padx=5, pady=2, sticky="w")
         ttk.Label(input_frame, text="Select platform - only matching links will generate SRT & images", font=("Arial", 8)).grid(row=3, column=1, columnspan=2, sticky="w", padx=5)
 
@@ -661,7 +660,6 @@ class UnifiedApp(tk.Tk):
             Platform.TIKTOK: ['tiktok.com', 'vm.tiktok.com'],
             Platform.YOUTUBE: ['youtube.com', 'youtu.be'],
             Platform.INSTAGRAM: ['instagram.com'],
-            Platform.SNAPCHAT: ['snapchat.com', 'snap.com'],
             Platform.OTHER: []  # Accept any URL for other
         }
 
