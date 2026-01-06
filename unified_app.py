@@ -283,21 +283,46 @@ class JobProcessor:
 
     async def _download_video(self, job: Job, job_dir: str) -> str:
         """Download video using yt-dlp"""
-        from downloader import download_all
+        import subprocess
+        import asyncio
 
         job.progress = "Downloading video..."
         self._update_status(job)
 
-        success, failed = download_all([job.url], job_dir, os.path.join(job_dir, "download.log"))
-        if failed > 0:
-            raise Exception(f"Failed to download video: {job.url}")
+        try:
+            # Run yt-dlp as subprocess
+            cmd = [
+                "yt-dlp",
+                "--output", os.path.join(job_dir, "%(title)s.%(ext)s"),
+                "--merge-output-format", "mp4",
+                job.url
+            ]
 
-        # Find the downloaded video file
-        for file in os.listdir(job_dir):
-            if file.endswith(('.mp4', '.mkv', '.webm', '.mov')):
-                return os.path.join(job_dir, file)
+            # Run in subprocess and capture output
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=job_dir
+            )
 
-        raise Exception("No video file found after download")
+            stdout, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                raise Exception(f"yt-dlp failed: {error_msg}")
+
+            # Find the downloaded video file
+            for file in os.listdir(job_dir):
+                if file.endswith(('.mp4', '.mkv', '.webm', '.mov')) and not file.endswith('.temp'):
+                    return os.path.join(job_dir, file)
+
+            raise Exception("No video file found after download")
+
+        except FileNotFoundError:
+            raise Exception("yt-dlp not found. Please install with: pip install yt-dlp")
+        except Exception as e:
+            raise Exception(f"Download failed: {str(e)}")
 
     def _should_generate_srt(self, job: Job) -> bool:
         """Determine if SRT should be generated based on platform and settings"""
@@ -401,8 +426,7 @@ class UnifiedApp(tk.Tk):
         self.processing_thread = threading.Thread(target=self._process_jobs_loop, daemon=True)
         self.processing_thread.start()
 
-        # Bind Enter key
-        self.bind("<Return>", lambda e: self._on_enter())
+        # Enter key binding removed - only button click submits
 
     def _load_app_settings(self) -> Dict[str, Any]:
         """Load application settings"""
@@ -516,10 +540,6 @@ class UnifiedApp(tk.Tk):
         dir_path = filedialog.askdirectory(title="Choose Output Directory")
         if dir_path:
             self.output_dir_var.set(dir_path)
-
-    def _on_enter(self):
-        """Handle Enter key press"""
-        self._add_job()
 
     def _add_job(self):
         """Add a new job to the queue"""
