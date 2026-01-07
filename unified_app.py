@@ -345,15 +345,17 @@ class JobProcessor:
             raise Exception(f"Download failed: {str(e)}")
 
     def _should_generate_srt(self, job: Job) -> bool:
-        """Determine if SRT should be generated based on platform and settings"""
-        if job.platform == Platform.TIKTOK:
-            return True
-        elif job.platform == Platform.INSTAGRAM:
-            return True
-        elif job.platform == Platform.YOUTUBE:
-            return self.settings.get("srt_youtube_enabled", False)
-        else:
-            return self.settings.get("srt_other_enabled", False)
+        """Determine if SRT should be generated based on URL matching selected platform"""
+        platform_domains = {
+            Platform.TIKTOK: ['tiktok.com', 'vm.tiktok.com'],
+            Platform.YOUTUBE: ['youtube.com', 'youtu.be'],
+            Platform.INSTAGRAM: ['instagram.com'],
+            Platform.OTHER: []  # Accept any URL for other
+        }
+
+        domains = platform_domains.get(job.platform, [])
+        # Generate SRT if URL matches the selected platform (or if OTHER is selected)
+        return job.platform == Platform.OTHER or any(domain in job.url for domain in domains)
 
     async def _generate_srt(self, job: Job, job_dir: str) -> str:
         """Generate SRT using Whisper"""
@@ -685,7 +687,7 @@ class UnifiedApp(tk.Tk):
             messagebox.showerror("Error", "Please enter video URLs")
             return
 
-        # Smart filtering: only process URLs that match the selected platform
+        # Download ALL videos, but only generate SRT/images from selected platform
         platform_domains = {
             Platform.TIKTOK: ['tiktok.com', 'vm.tiktok.com'],
             Platform.YOUTUBE: ['youtube.com', 'youtu.be'],
@@ -694,23 +696,23 @@ class UnifiedApp(tk.Tk):
         }
 
         domains = platform_domains.get(platform, [])
-        matching_urls = []
-        skipped_urls = []
+
+        # Create jobs for ALL URLs, but mark SRT generation based on platform match
+        jobs_added = 0
+        srt_jobs = 0
+        video_only_jobs = 0
 
         for url in all_urls:
-            if platform == Platform.OTHER or any(domain in url for domain in domains):
-                matching_urls.append(url)
+            job_topic = f"{topic} - {jobs_added + 1}" if len(all_urls) > 1 else topic
+
+            # Check if this URL matches the selected platform for SRT generation
+            should_generate_srt = (platform == Platform.OTHER or
+                                 any(domain in url for domain in domains))
+
+            if should_generate_srt:
+                srt_jobs += 1
             else:
-                skipped_urls.append(url)
-
-        if not matching_urls:
-            messagebox.showerror("Error", f"No {platform_str} URLs found in the list")
-            return
-
-        # Create jobs for matching URLs
-        jobs_added = 0
-        for url in matching_urls:
-            job_topic = f"{topic} - {jobs_added + 1}" if len(matching_urls) > 1 else topic
+                video_only_jobs += 1
 
             job = Job(
                 id="",
@@ -728,12 +730,12 @@ class UnifiedApp(tk.Tk):
 
         # Update UI
         self._update_job_list()
-        self._log_status(f"Added {jobs_added} job(s) for {platform_str}")
+        self._log_status(f"Added {jobs_added} job(s) - {srt_jobs} with SRT/images, {video_only_jobs} video-only")
 
         # Show summary in error box
-        summary = f"✅ Added {jobs_added} {platform_str} jobs\n"
-        if skipped_urls:
-            summary += f"⏭️  Skipped {len(skipped_urls)} non-{platform_str} URLs\n"
+        summary = f"✅ Added {jobs_added} total jobs\n"
+        summary += f"🎬 {srt_jobs} jobs will generate SRT & images ({platform_str})\n"
+        summary += f"📹 {video_only_jobs} jobs are video-only downloads\n"
         self._show_error(summary)
 
         # Clear input fields

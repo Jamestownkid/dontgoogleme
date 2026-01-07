@@ -310,10 +310,33 @@ async def google_images_download(
                 try:
                     set_status(f"Downloading {saved+1}/{images_needed} for '{keyword}'")
                     r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-                    if r.status_code == 200 and len(r.content) > 1000:
-                        with open(filename, "wb") as f:
-                            f.write(r.content)
-                        saved += 1
+                    if r.status_code == 200 and len(r.content) > 2000:  # Minimum 2KB
+                        # Check if it's actually a valid image with reasonable dimensions
+                        try:
+                            from PIL import Image
+                            import io
+
+                            # Try to open as image to validate
+                            img = Image.open(io.BytesIO(r.content))
+                            width, height = img.size
+
+                            # Skip if image is too small (likely low quality or icon)
+                            min_dimension = 200  # Minimum 200px on smallest side
+                            if width >= min_dimension and height >= min_dimension:
+                                with open(filename, "wb") as f:
+                                    f.write(r.content)
+                                saved += 1
+                                set_status(f"Saved {width}x{height} image for '{keyword}'")
+                            else:
+                                set_status(f"Skipped {width}x{height} image (too small) for '{keyword}'")
+                        except Exception:
+                            # If PIL can't open it, still save if it's reasonably sized
+                            if len(r.content) > 5000:  # Fallback to 5KB minimum
+                                with open(filename, "wb") as f:
+                                    f.write(r.content)
+                                saved += 1
+                            else:
+                                set_status(f"Skipped invalid/unreadable image for '{keyword}'")
                 except Exception:
                     continue
 
