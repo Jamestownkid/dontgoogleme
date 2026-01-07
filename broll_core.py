@@ -243,7 +243,11 @@ async def google_images_download(
                 set_status(f"No thumbnails found with any selector for '{keyword}'")
                 break
 
-            for idx in range(len(thumbs)):
+            # Keep processing thumbnails until we have enough high-quality images
+            # or we've tried a reasonable number (up to 3x the requested amount)
+            max_thumb_attempts = min(len(thumbs), images_needed * 3)
+
+            for idx in range(max_thumb_attempts):
                 if saved >= images_needed:
                     break
 
@@ -308,7 +312,7 @@ async def google_images_download(
                     safe_keyword = keyword.replace(' ', '_').replace('/', '_')[:20]  # Limit length
                     filename = os.path.join(out_dir, f"{safe_keyword}_{saved+1:02d}.jpg")
                 try:
-                    set_status(f"Downloading {saved+1}/{images_needed} for '{keyword}'")
+                    set_status(f"Finding high-quality images: {saved}/{images_needed} found for '{keyword}'")
                     r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
                     if r.status_code == 200 and len(r.content) > 2000:  # Minimum 2KB
                         # Check if it's actually a valid image with reasonable dimensions
@@ -326,9 +330,9 @@ async def google_images_download(
                                 with open(filename, "wb") as f:
                                     f.write(r.content)
                                 saved += 1
-                                set_status(f"Saved {width}x{height} image for '{keyword}'")
+                                set_status(f"✅ Saved high-quality {width}x{height} image for '{keyword}' ({saved}/{images_needed})")
                             else:
-                                set_status(f"Skipped {width}x{height} image (too small) for '{keyword}'")
+                                set_status(f"⏭️ Skipped low-quality {width}x{height} image for '{keyword}' (continuing search...)")
                         except Exception:
                             # If PIL can't open it, still save if it's reasonably sized
                             if len(r.content) > 5000:  # Fallback to 5KB minimum
