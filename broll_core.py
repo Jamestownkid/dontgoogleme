@@ -153,6 +153,14 @@ async def google_images_download(
     """Download up to images_needed images for a keyword into out_dir."""
     ensure_dir(out_dir)
 
+    # Check if links file exists, if not create it
+    links_file = os.path.join(out_dir, "image_links.txt")
+    if not os.path.exists(links_file):
+        with open(links_file, "w", encoding="utf-8") as f:
+            f.write("# All downloaded image URLs\n")
+            f.write(f"# Generated for job: {os.path.basename(os.path.dirname(out_dir))}\n")
+            f.write("# Format: URL\n\n")
+
     browser_exe = which_browser_executable()
 
     async with async_playwright() as p:
@@ -331,6 +339,11 @@ async def google_images_download(
                                     f.write(r.content)
                                 saved += 1
                                 set_status(f"✅ Saved high-quality {width}x{height} image for '{keyword}' ({saved}/{images_needed})")
+
+                                # Save URL to links file
+                                links_file = os.path.join(out_dir, "image_links.txt")
+                                with open(links_file, "a", encoding="utf-8") as f:
+                                    f.write(f"{url}\n")
                             else:
                                 set_status(f"⏭️ Skipped low-quality {width}x{height} image for '{keyword}' (continuing search...)")
                         except Exception:
@@ -339,8 +352,14 @@ async def google_images_download(
                                 with open(filename, "wb") as f:
                                     f.write(r.content)
                                 saved += 1
+                                set_status(f"✅ Saved image for '{keyword}' ({saved}/{images_needed})")
+
+                                # Save URL to links file
+                                links_file = os.path.join(out_dir, "image_links.txt")
+                                with open(links_file, "a", encoding="utf-8") as f:
+                                    f.write(f"{url}\n")
                             else:
-                                set_status(f"Skipped invalid/unreadable image for '{keyword}'")
+                                set_status(f"⏭️ Skipped invalid/unreadable image for '{keyword}'")
                 except Exception:
                     continue
 
